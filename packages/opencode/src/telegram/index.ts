@@ -1,12 +1,13 @@
 import path from "path"
 import { Log } from "@/util"
-import { Session } from "@/session"
-import { SessionID } from "@/session/schema"
 import { Instance } from "@/project/instance"
 import { readJson, writeJson } from "@/util/filesystem"
 import { Global } from "@opencode-ai/core/global"
 
 const log = Log.create({ service: "telegram" })
+
+// Global guard to prevent multiple instances
+let botStarted = false
 
 function parseIds(envVar: string | undefined): number[] {
   if (!envVar) return []
@@ -15,28 +16,26 @@ function parseIds(envVar: string | undefined): number[] {
 
 interface TelegramSessionRecord {
   sessionID: string
+  directory: string
   chatId: number
   createdAt: number
 }
 
 export async function startTelegramBot(): Promise<void> {
+  // Prevent double start
+  if (botStarted) return
+  botStarted = true
+
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_TOKEN
 
-  console.log("[telegram] TELEGRAM_BOT_TOKEN:", process.env.TELEGRAM_BOT_TOKEN)
-
   if (!telegramBotToken) {
-    log.info("telegram bot not configured, skipping")
-    console.log("[telegram] TELEGRAM_BOT_TOKEN not set")
     return
   }
 
   const allowedChats = parseIds(process.env.TELEGRAM_ALLOWED_CHATS)
   const allowedUsers = parseIds(process.env.TELEGRAM_ALLOWED_USERS)
 
-  console.log("[telegram] checking config:", { token: !!telegramBotToken })
-
   const directory = Instance.directory
-  console.log("[telegram] directory:", directory)
 
   const sessionsDir = path.join(Global.Path.state, "telegram-sessions.json")
 
@@ -55,23 +54,14 @@ export async function startTelegramBot(): Promise<void> {
   // Test the bot token
   const botInfo = await telegramRequest(telegramBotToken, "getMe")
   if (!botInfo.ok) {
-    console.log("[telegram] bot auth failed:", botInfo)
+    console.log("[telegram] bot auth failed")
     return
   }
 
   console.log("[telegram] bot started:", botInfo.result?.username)
 
-  // Use polling - but long polling via getUpdates is complex, 
-  // let's use webhook approach or simple polling
-  console.log("[telegram] polling initialized")
-
-  // For simplicity with Bot API, we'll store pending messages and check via getUpdates
-  // Actually, bots can only receive messages via webhooks orpolling. 
-  // Let's use a simple approach - just respond to commands via getUpdates
-  
-  // Start a simple polling loop
   let offset = 0
-  const pollInterval = setInterval(async () => {
+  setInterval(async () => {
     try {
       const updates = await telegramRequest(telegramBotToken, "getUpdates", {
         timeout: 30,
@@ -81,13 +71,13 @@ export async function startTelegramBot(): Promise<void> {
       if (updates.ok && updates.result) {
         for (const update of updates.result) {
           offset = update.update_id
-          await handleUpdate(update, telegramBotToken, sessionsMap, allowedChats, allowedUsers, saveSessions)
+          await handleUpdate(update, telegramBotToken, sessionsMap, allowedChats, allowedUsers)
         }
       }
-    } catch (e) {
+    } catch {
       // Ignore polling errors
     }
-  }, 5000)
+  }, 3000)
 
   async function handleUpdate(
     update: any,
@@ -95,7 +85,6 @@ export async function startTelegramBot(): Promise<void> {
     sessions: Map<string, TelegramSessionRecord>,
     allowedChats: number[],
     allowedUsers: number[],
-    saveFn: () => Promise<void>,
   ) {
     const message = update.message
     if (!message) return
@@ -116,26 +105,25 @@ export async function startTelegramBot(): Promise<void> {
 
     if (text.startsWith("/opencode")) {
       const parts = text.split(" ").filter(Boolean)
-      
+
       if (parts.length === 1) {
-        // No args - auto-link to most recent session
-        await handleAutoLink(chatId, token, sessions, saveFn)
+        await handleAutoLink(chatId, token, sessions)
         return
       }
-      
+
       if (parts[1] === "list") {
         await handleListSessions(chatId, token)
         return
       }
-      
+
       if (parts[1] === "help") {
-        await telegramRequest(token, "sendMessage", { 
-          chat_id: chatId, 
-          text: "Commands:\n/opencode - Link to latest session\n/opencode <slug> - Link to specific session\n/opencode list - Show recent sessions\n/opencode disconnect - Unlink session" 
+        await telegramRequest(token, "sendMessage", {
+          chat_id: chatId,
+          text: "Commands:\n/opencode - Link to latest session\n/opencode list - Show recent sessions\n/opencode disconnect - Unlink session",
         })
         return
       }
-      
+
       if (parts[1] === "disconnect") {
         sessions.delete(String(chatId))
         await saveSessions()
@@ -144,7 +132,7 @@ export async function startTelegramBot(): Promise<void> {
       }
 
       const sessionSlug = parts[1]
-      await handleOpencodeCommand(chatId, sessionSlug, token, sessions, saveFn)
+      await handleOpencodeCommand(chatId, sessionSlug, token, sessions)
       return
     }
 
@@ -152,11 +140,11 @@ export async function startTelegramBot(): Promise<void> {
     const sessionInfo = sessions.get(sessionKey)
 
     if (!sessionInfo) {
-      await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "No linked session.\n\nJust send /opencode to link to your most recent session!" })
+      await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "No linked session.\n\nSend /opencode to link to your session." })
       return
     }
 
-    await handleSessionMessage(chatId, sessionInfo.sessionID, text, token)
+    await handleSessionMessage(chatId, sessionInfo.sessionID, sessionInfo.directory, text, token)
   }
 
   async function handleOpencodeCommand(
@@ -164,115 +152,94 @@ export async function startTelegramBot(): Promise<void> {
     sessionSlug: string,
     token: string,
     sessions: Map<string, TelegramSessionRecord>,
-    saveFn: () => Promise<void>,
   ) {
-    const allSessions = await Session.list({ search: sessionSlug })
+    const sessionDir = directory
+    const getResult = await fetch(`http://localhost:4096/session/${sessionSlug}`, {
+      headers: { "x-opencode-directory": sessionDir },
+    }).then((r) => (r.ok ? r.json().catch(() => null) : null))
 
-    let foundID: SessionID | undefined
-    for await (const s of allSessions) {
-      if (s.slug === sessionSlug) {
-        foundID = s.id
-        break
-      }
-    }
-
-    if (!foundID) {
+    if (!getResult?.id) {
       await telegramRequest(token, "sendMessage", { chat_id: chatId, text: `Session not found: ${sessionSlug}` })
       return
     }
 
     const key = String(chatId)
     sessions.set(key, {
-      sessionID: foundID,
+      sessionID: getResult.id,
+      directory: getResult.directory || sessionDir,
       chatId,
       createdAt: Date.now(),
     })
 
     await saveSessions()
 
-    await telegramRequest(token, "sendMessage", { chat_id: chatId, text: `Session linked: ${sessionSlug}` })
+    await telegramRequest(token, "sendMessage", { chat_id: chatId, text: `Session linked: ${getResult.title}` })
   }
 
-  async function handleAutoLink(
-    chatId: number,
-    token: string,
-    sessions: Map<string, TelegramSessionRecord>,
-    saveFn: () => Promise<void>,
-  ) {
-    // Get recent sessions and link to the most recent one
-    const allSessions = await Session.list({ limit: 5 })
-    
-    const sessionList: Array<{id: SessionID, slug: string, title: string}> = []
-    for await (const s of allSessions) {
-      sessionList.push({ id: s.id, slug: s.slug, title: s.title })
-    }
-    
-    if (sessionList.length === 0) {
-      await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "No sessions found. Create one in the browser first." })
+  async function handleAutoLink(chatId: number, token: string, sessions: Map<string, TelegramSessionRecord>) {
+    const listResult = await sessionHttpRequest("GET", "/session?limit=5")
+
+    if (listResult?.sessions?.length > 0) {
+      const latest = listResult.sessions[0]
+      const key = String(chatId)
+      sessions.set(key, {
+        sessionID: latest.id,
+        directory: latest.directory || directory,
+        chatId,
+        createdAt: Date.now(),
+      })
+
+      await saveSessions()
+      await telegramRequest(token, "sendMessage", { chat_id: chatId, text: `Linked to: ${latest.title}` })
       return
     }
-    
-    // Link to the most recent session
-    const latest = sessionList[0]
-    const key = String(chatId)
-    sessions.set(key, {
-      sessionID: latest.id,
-      chatId,
-      createdAt: Date.now(),
-    })
-    
-    await saveFn()
-    
-    await telegramRequest(token, "sendMessage", { 
-      chat_id: chatId, 
-      text: `Linked to latest session: ${latest.title}\nSlug: ${latest.slug}` 
+
+    await telegramRequest(token, "sendMessage", {
+      chat_id: chatId,
+      text: "No sessions found.\n\nIn browser:\n1. Open your session\n2. Click Share and copy the URL slug\n3. Send it as: /opencode <slug>",
     })
   }
 
-  async function handleListSessions(
-    chatId: number,
-    token: string,
-  ) {
-    const allSessions = await Session.list({ limit: 5 })
-    
-    let msg = "Recent sessions:\n"
-    let i = 0
-    for await (const s of allSessions) {
-      i++
-      msg += `${i}. ${s.title} (${s.slug})\n`
+  async function handleListSessions(chatId: number, token: string) {
+    const listResult = await sessionHttpRequest("GET", "/session?limit=5")
+
+    if (!listResult?.sessions?.length) {
+      await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "No sessions found." })
+      return
     }
-    msg += "\nUse /opencode to link to the latest"
-    
+
+    let msg = "Recent sessions:\n"
+    for (let i = 0; i < listResult.sessions.length; i++) {
+      const s = listResult.sessions[i]
+      msg += `${i + 1}. ${s.title} (${s.slug})\n`
+    }
+
     await telegramRequest(token, "sendMessage", { chat_id: chatId, text: msg })
   }
 
-  async function handleSessionMessage(
-    chatId: number,
-    sessionIDStr: string,
-    text: string,
-    token: string,
-  ) {
-    const sessionID = SessionID.make(sessionIDStr)
-
+  async function handleSessionMessage(chatId: number, sessionID: string, sessionDir: string, text: string, token: string) {
     try {
-      const result = await Session.prompt({
-        sessionID,
-        parts: [{ type: "text" as const, text }],
+      console.log("[telegram] handleSessionMessage:", sessionID, sessionDir, text.slice(0, 50))
+
+      // Use prompt_async endpoint - returns 204 immediately
+      console.log("[telegram] sending to prompt_async...")
+      const response = await fetch(`http://localhost:4096/session/${sessionID}/prompt_async`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-opencode-directory": sessionDir,
+        },
+        body: JSON.stringify({ parts: [{ type: "text", text }] }),
       })
 
-      if (!result) {
-        await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "Sorry, I had trouble processing your message." })
+      console.log("[telegram] prompt_async status:", response.status)
+
+      if (!response.ok) {
+        await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "Sorry, error sending message." })
         return
       }
 
-      const responseText = result.parts
-        ?.filter((p: any) => p.type === "text")
-        .map((p: any) => p.text)
-        .join("\n")
-
-      if (responseText) {
-        await telegramRequest(token, "sendMessage", { chat_id: chatId, text: responseText })
-      }
+      await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "Response sent. Check browser for details." })
     } catch (e: any) {
       await telegramRequest(token, "sendMessage", { chat_id: chatId, text: `Error: ${e?.message || e}` })
     }
@@ -283,12 +250,22 @@ export async function startTelegramBot(): Promise<void> {
     await writeJson(sessionsDir, data)
   }
 
+  async function sessionHttpRequest(method: string, path: string, body?: any): Promise<any> {
+    const response = await fetch(`http://127.0.0.1:4096${path}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (!response.ok) return null
+    return response.json().catch(() => null)
+  }
+
   console.log("[telegram] telegram bot polling started")
 }
 
 async function telegramRequest(token: string, method: string, params?: any): Promise<any> {
   const url = `https://api.telegram.org/bot${token}/${method}`
-  
+
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
