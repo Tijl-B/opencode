@@ -29,8 +29,23 @@ export const InstanceBootstrap = Effect.gen(function* () {
       FileWatcher.Service,
       Vcs.Service,
       Snapshot.Service,
-    ].map((s) => Effect.forkDetach(s.use((i) => i.init()))),
+    ].map((s) => Effect.forkDetach(s.use((i: any) => i.init()))),
   ).pipe(Effect.withSpan("InstanceBootstrap.init"))
+
+  // Start telegram bot in background (non-blocking)
+  Effect.runPromise(
+    (async () => {
+      try {
+        console.log("[telegram] starting bot...")
+        const telegram = await import("../telegram")
+        console.log("[telegram] module imported")
+        await telegram.startTelegramBot()
+      } catch (e: any) {
+        console.log("[telegram] error:", e?.message || e)
+        Log.Default.warn("telegram bot failed to start", { error: e?.message || e })
+      }
+    })(),
+  )
 
   yield* Bus.Service.use((svc) =>
     svc.subscribeCallback(Command.Event.Executed, async (payload) => {
