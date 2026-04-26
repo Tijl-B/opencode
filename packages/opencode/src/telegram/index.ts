@@ -221,6 +221,14 @@ export async function startTelegramBot(): Promise<void> {
     try {
       console.log("[telegram] handleSessionMessage:", sessionID, sessionDir, text.slice(0, 50))
 
+      // Get current message count before sending
+      const beforeMsgs = await sessionHttpRequest("GET", `/session/${sessionID}/message?limit=1`, undefined, sessionDir)
+      console.log("[telegram] beforeMsgs raw:", JSON.stringify(beforeMsgs).slice(0, 500))
+      // Response is an array at root, not .messages
+      const msgsArray = Array.isArray(beforeMsgs) ? beforeMsgs : (beforeMsgs?.messages || [])
+      const beforeCount = msgsArray.length
+      console.log("[telegram] beforeCount:", beforeCount)
+
       // Use prompt_async endpoint - returns 204 immediately
       console.log("[telegram] sending to prompt_async...")
       const response = await fetch(`http://localhost:4096/session/${sessionID}/prompt_async`, {
@@ -239,6 +247,38 @@ export async function startTelegramBot(): Promise<void> {
         return
       }
 
+      // Poll for new messages until we get a response
+      let attempts = 0
+      let newMsgs = beforeMsgs
+      while (attempts < 60) {
+        await new Promise((r) => setTimeout(r, 1000))
+        newMsgs = await sessionHttpRequest("GET", `/session/${sessionID}/message?limit=5`, undefined, sessionDir)
+        console.log("[telegram] polling raw:", JSON.stringify(newMsgs).slice(0, 500))
+        // Response is array at root
+        const currentMsgs = Array.isArray(newMsgs) ? newMsgs : (newMsgs?.messages || [])
+        const currentCount = currentMsgs.length
+        console.log("[telegram] polling:", currentCount, "vs", beforeCount)
+
+        if (currentCount > beforeCount) {
+          const allMsgs = Array.isArray(newMsgs) ? newMsgs : (newMsgs?.messages || [])
+          for (const msg of allMsgs) {
+            if (msg.info.role === "assistant" && msg.parts) {
+              let responseText = ""
+              for (const p of msg.parts) {
+                if (p.type === "text") responseText += p.text
+              }
+              if (responseText) {
+                const textToSend = responseText.length > 4000 ? responseText.slice(0, 4000) : responseText
+                await telegramRequest(token, "sendMessage", { chat_id: chatId, text: textToSend })
+                return
+              }
+            }
+          }
+          // Got new messages but no assistant text yet - wait more
+        }
+        attempts++
+      }
+
       await telegramRequest(token, "sendMessage", { chat_id: chatId, text: "Response sent. Check browser for details." })
     } catch (e: any) {
       await telegramRequest(token, "sendMessage", { chat_id: chatId, text: `Error: ${e?.message || e}` })
@@ -250,10 +290,13 @@ export async function startTelegramBot(): Promise<void> {
     await writeJson(sessionsDir, data)
   }
 
-  async function sessionHttpRequest(method: string, path: string, body?: any): Promise<any> {
+  async function sessionHttpRequest(method: string, path: string, body?: any, sessionDir?: string): Promise<any> {
     const response = await fetch(`http://127.0.0.1:4096${path}`, {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "x-opencode-directory": sessionDir || "",
+      },
       body: body ? JSON.stringify(body) : undefined,
     })
     if (!response.ok) return null
