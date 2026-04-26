@@ -1,0 +1,4 @@
+.env
+*.session.json
+telegram.session.json
+telegram.config.json

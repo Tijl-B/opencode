@@ -1,0 +1,6 @@
+{
+  "extends": "@tsconfig/bun",
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}

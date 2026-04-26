@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "opencode": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "default": "http://127.0.0.1:4096"
+        },
+        "directory": {
+          "type": "string",
+          "description": "Working directory for bot sessions"
+        }
+      }
+    },
+    "telegram": {
+      "type": "object",
+      "properties": {
+        "allowedChats": {
+          "type": "array",
+          "items": { "type": "number" },
+          "default": [],
+          "description": "Chat IDs allowed to use the bot. Empty = allow all."
+        },
+        "allowedUsers": {
+          "type": "array",
+          "items": { "type": "number" },
+          "default": [],
+          "description": "User IDs allowed to use the bot. Empty = allow all."
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "defaultModel": {
+          "type": "object",
+          "properties": {
+            "providerID": {
+              "type": "string",
+              "default": "openai"
+            },
+            "modelID": {
+              "type": "string",
+              "default": "gpt-4o"
+            }
+          }
+        },
+        "autoShare": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically share sessions with a public URL"
+        },
+        "persistDirectory": {
+          "type": "string",
+          "description": "Directory to store session state"
+        }
+      }
+    }
+  }
+}
