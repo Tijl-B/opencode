@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test"
+import { afterEach, expect, mock, test } from "bun:test"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
 
@@ -17,6 +17,11 @@ import { makeRuntime } from "../../src/effect/run-service"
 
 const env = makeRuntime(Env.Service, Env.defaultLayer)
 const set = (k: string, v: string) => env.runSync((svc) => svc.set(k, v))
+const originalFetch = globalThis.fetch
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
+})
 
 async function run<A, E>(fn: (provider: Provider.Interface) => Effect.Effect<A, E, never>) {
   return AppRuntime.runPromise(
@@ -1115,6 +1120,73 @@ test("provider with custom npm package", async () => {
       expect(providers[ProviderID.make("local-llm")]).toBeDefined()
       expect(providers[ProviderID.make("local-llm")].models["llama-3"].api.npm).toBe("@ai-sdk/openai-compatible")
       expect(providers[ProviderID.make("local-llm")].options.baseURL).toBe("http://localhost:11434/v1")
+    },
+  })
+})
+
+test("ollama provider discovers local models from /api/tags", async () => {
+  globalThis.fetch = mock((url: string | URL | Request) => {
+    expect(String(url)).toBe("http://localhost:11434/api/tags")
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          models: [
+            {
+              name: "qwen3-coder:30b",
+              model: "qwen3-coder:30b",
+              details: {
+                context_length: 262144,
+              },
+            },
+            {
+              name: "llama3.2:latest",
+              model: "llama3.2:latest",
+              details: {
+                context_length: 131072,
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    )
+  }) as unknown as typeof fetch
+
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            ollama: {
+              name: "Ollama",
+              npm: "@ai-sdk/openai-compatible",
+              models: {
+                "qwen3-coder:30b": {
+                  name: "Qwen3 Coder 30B",
+                  tool_call: true,
+                  limit: { context: 262144, output: 8192 },
+                },
+              },
+              options: {
+                baseURL: "http://localhost:11434/v1",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await list()
+      expect(providers[ProviderID.make("ollama")]).toBeDefined()
+      expect(providers[ProviderID.make("ollama")].models["qwen3-coder:30b"]).toBeDefined()
+      expect(providers[ProviderID.make("ollama")].models["llama3.2:latest"]).toBeDefined()
+      expect(providers[ProviderID.make("ollama")].models["llama3.2:latest"].limit.context).toBe(131072)
     },
   })
 })

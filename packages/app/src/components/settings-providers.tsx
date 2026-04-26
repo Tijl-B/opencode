@@ -3,7 +3,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { Tag } from "@opencode-ai/ui/tag"
 import { showToast } from "@opencode-ai/ui/toast"
-import { popularProviders, useProviders } from "@/hooks/use-providers"
+import { localProviders, popularProviders, useProviders } from "@/hooks/use-providers"
 import { createMemo, type Component, For, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useGlobalSDK } from "@/context/global-sdk"
@@ -19,6 +19,7 @@ type ProviderItem = ReturnType<ReturnType<typeof useProviders>["connected"]>[num
 const PROVIDER_NOTES = [
   { match: (id: string) => id === "opencode", key: "dialog.provider.opencode.note" },
   { match: (id: string) => id === "opencode-go", key: "dialog.provider.opencodeGo.tagline" },
+  { match: (id: string) => id === "ollama", key: "dialog.provider.ollama.note" },
   { match: (id: string) => id === "anthropic", key: "dialog.provider.anthropic.note" },
   { match: (id: string) => id.startsWith("github-copilot"), key: "dialog.provider.copilot.note" },
   { match: (id: string) => id === "openai", key: "dialog.provider.openai.note" },
@@ -46,6 +47,7 @@ export const SettingsProviders: Component = () => {
       .popular()
       .filter((p) => !connectedIDs.has(p.id))
       .slice()
+    items.push(...localProviders.filter((item) => !connectedIDs.has(item.id) && !items.find((provider) => provider.id === item.id)))
     items.sort((a, b) => popularProviders.indexOf(a.id) - popularProviders.indexOf(b.id))
     return items
   })
@@ -199,6 +201,10 @@ export const SettingsProviders: Component = () => {
                     variant="secondary"
                     icon="plus-small"
                     onClick={() => {
+                      if (item.id === "ollama") {
+                        dialog.show(() => <DialogCustomProvider back="close" preset="ollama" />)
+                        return
+                      }
                       dialog.show(() => <DialogConnectProvider provider={item.id} />)
                     }}
                   >

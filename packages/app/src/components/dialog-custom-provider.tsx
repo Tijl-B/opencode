@@ -12,11 +12,19 @@ import { Link } from "@/components/link"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
 import { useLanguage } from "@/context/language"
-import { type FormState, headerRow, modelRow, validateCustomProvider } from "./dialog-custom-provider-form"
+import {
+  createCustomProviderForm,
+  type CustomProviderPreset,
+  type FormState,
+  headerRow,
+  modelRow,
+  validateCustomProvider,
+} from "./dialog-custom-provider-form"
 import { DialogSelectProvider } from "./dialog-select-provider"
 
 type Props = {
   back?: "providers" | "close"
+  preset?: CustomProviderPreset
 }
 
 export function DialogCustomProvider(props: Props) {
@@ -25,15 +33,7 @@ export function DialogCustomProvider(props: Props) {
   const globalSDK = useGlobalSDK()
   const language = useLanguage()
 
-  const [form, setForm] = createStore<FormState>({
-    providerID: "",
-    name: "",
-    baseURL: "",
-    apiKey: "",
-    models: [modelRow()],
-    headers: [headerRow()],
-    err: {},
-  })
+  const [form, setForm] = createStore<FormState>(createCustomProviderForm(props.preset))
 
   const goBack = () => {
     if (props.back === "close") {
@@ -161,6 +161,8 @@ export function DialogCustomProvider(props: Props) {
     saveMutation.mutate(result)
   }
 
+  const ollama = () => props.preset === "ollama"
+
   return (
     <Dialog
       title={
@@ -176,17 +178,25 @@ export function DialogCustomProvider(props: Props) {
     >
       <div class="flex flex-col gap-6 px-2.5 pb-3 overflow-y-auto max-h-[60vh]">
         <div class="px-2.5 flex gap-4 items-center">
-          <ProviderIcon id="synthetic" class="size-5 shrink-0 icon-strong-base" />
-          <div class="text-16-medium text-text-strong">{language.t("provider.custom.title")}</div>
+          <ProviderIcon id={ollama() ? "ollama" : "synthetic"} class="size-5 shrink-0 icon-strong-base" />
+          <div class="text-16-medium text-text-strong">
+            {ollama() ? language.t("provider.ollama.title") : language.t("provider.custom.title")}
+          </div>
         </div>
 
         <form onSubmit={save} class="px-2.5 pb-6 flex flex-col gap-6">
           <p class="text-14-regular text-text-base">
-            {language.t("provider.custom.description.prefix")}
-            <Link href="https://opencode.ai/docs/providers/#custom-provider" tabIndex={-1}>
-              {language.t("provider.custom.description.link")}
-            </Link>
-            {language.t("provider.custom.description.suffix")}
+            {ollama() ? (
+              language.t("provider.ollama.description")
+            ) : (
+              <>
+                {language.t("provider.custom.description.prefix")}
+                <Link href="https://opencode.ai/docs/providers/#custom-provider" tabIndex={-1}>
+                  {language.t("provider.custom.description.link")}
+                </Link>
+                {language.t("provider.custom.description.suffix")}
+              </>
+            )}
           </p>
 
           <div class="flex flex-col gap-4">

@@ -6,6 +6,7 @@ import { createMemo } from "solid-js"
 export const popularProviders = [
   "opencode",
   "opencode-go",
+  "ollama",
   "anthropic",
   "github-copilot",
   "openai",
@@ -13,6 +14,7 @@ export const popularProviders = [
   "openrouter",
   "vercel",
 ]
+export const localProviders = [{ id: "ollama", name: "Ollama" }] as const
 const popularProviderSet = new Set(popularProviders)
 
 export function useProviders() {

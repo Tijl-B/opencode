@@ -41,6 +41,8 @@ export type FormState = {
   }
 }
 
+export type CustomProviderPreset = "ollama"
+
 type ValidateArgs = {
   form: FormState
   t: Translator
@@ -154,5 +156,29 @@ let row = 0
 
 const nextRow = () => `row-${row++}`
 
-export const modelRow = (): ModelRow => ({ row: nextRow(), id: "", name: "", err: {} })
-export const headerRow = (): HeaderRow => ({ row: nextRow(), key: "", value: "", err: {} })
+export const modelRow = (id = "", name = ""): ModelRow => ({ row: nextRow(), id, name, err: {} })
+export const headerRow = (key = "", value = ""): HeaderRow => ({ row: nextRow(), key, value, err: {} })
+
+export function createCustomProviderForm(preset?: CustomProviderPreset): FormState {
+  if (preset === "ollama") {
+    return {
+      providerID: "ollama",
+      name: "Ollama",
+      baseURL: "http://localhost:11434/v1",
+      apiKey: "",
+      models: [modelRow("qwen3-coder:30b", "Qwen3 Coder 30B")],
+      headers: [headerRow()],
+      err: {},
+    }
+  }
+
+  return {
+    providerID: "",
+    name: "",
+    baseURL: "",
+    apiKey: "",
+    models: [modelRow()],
+    headers: [headerRow()],
+    err: {},
+  }
+}

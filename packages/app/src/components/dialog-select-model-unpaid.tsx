@@ -5,9 +5,9 @@ import { List, type ListRef } from "@opencode-ai/ui/list"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { Tag } from "@opencode-ai/ui/tag"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
-import { type Component, Show } from "solid-js"
+import { createMemo, type Component, Show } from "solid-js"
 import { useLocal } from "@/context/local"
-import { popularProviders, useProviders } from "@/hooks/use-providers"
+import { localProviders, popularProviders, useProviders } from "@/hooks/use-providers"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
 
@@ -20,6 +20,12 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
   const language = useLanguage()
 
   const connect = (provider: string) => {
+    if (provider === "ollama") {
+      void import("./dialog-custom-provider").then((x) => {
+        dialog.show(() => <x.DialogCustomProvider back="close" preset="ollama" />)
+      })
+      return
+    }
     void import("./dialog-connect-provider").then((x) => {
       dialog.show(() => <x.DialogConnectProvider provider={provider} />)
     })
@@ -36,6 +42,17 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
     if (e.key === "Escape") return
     listRef?.onKeyDown(e)
   }
+  const popular = createMemo(() => {
+    const items = providers.popular().slice()
+    items.push(...localProviders.filter((item) => !items.find((provider) => provider.id === item.id)))
+    items.sort((a, b) => {
+      if (popularProviders.includes(a.id) && popularProviders.includes(b.id)) {
+        return popularProviders.indexOf(a.id) - popularProviders.indexOf(b.id)
+      }
+      return a.name.localeCompare(b.name)
+    })
+    return items
+  })
 
   return (
     <Dialog
@@ -92,13 +109,8 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
               <List
                 class="w-full px-0"
                 key={(x) => x?.id}
-                items={providers.popular}
+                items={popular}
                 activeIcon="plus-small"
-                sortBy={(a, b) => {
-                  if (popularProviders.includes(a.id) && popularProviders.includes(b.id))
-                    return popularProviders.indexOf(a.id) - popularProviders.indexOf(b.id)
-                  return a.name.localeCompare(b.name)
-                }}
                 onSelect={(x) => {
                   if (!x) return
                   connect(x.id)
@@ -124,6 +136,9 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
                     </Show>
                     <Show when={i.id === "anthropic"}>
                       <div class="text-14-regular text-text-weak">{language.t("dialog.provider.anthropic.note")}</div>
+                    </Show>
+                    <Show when={i.id === "ollama"}>
+                      <div class="text-14-regular text-text-weak">{language.t("dialog.provider.ollama.note")}</div>
                     </Show>
                   </div>
                 )}

@@ -1,9 +1,23 @@
 import { describe, expect, test } from "bun:test"
-import { validateCustomProvider } from "./dialog-custom-provider-form"
+import { createCustomProviderForm, validateCustomProvider } from "./dialog-custom-provider-form"
 
 const t = (key: string) => key
 
 describe("validateCustomProvider", () => {
+  test("creates the Ollama preset with local defaults", () => {
+    const result = createCustomProviderForm("ollama")
+
+    expect(result).toMatchObject({
+      providerID: "ollama",
+      name: "Ollama",
+      baseURL: "http://localhost:11434/v1",
+      apiKey: "",
+    })
+    expect(result.models).toHaveLength(1)
+    expect(result.models[0]).toMatchObject({ id: "qwen3-coder:30b", name: "Qwen3 Coder 30B" })
+    expect(result.headers).toHaveLength(1)
+  })
+
   test("builds trimmed config payload", () => {
     const result = validateCustomProvider({
       form: {

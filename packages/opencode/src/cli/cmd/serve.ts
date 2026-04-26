@@ -5,9 +5,17 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 
 export const ServeCommand = cmd({
   command: "serve",
-  builder: (yargs) => withNetworkOptions(yargs),
+  builder: (yargs) =>
+    withNetworkOptions(yargs).option("llm-raw-log-payloads", {
+      type: "boolean",
+      default: false,
+      describe: "print raw LLM request/response payloads to stderr",
+    }),
   describe: "starts a headless opencode server",
   handler: async (args) => {
+    if (args.llmRawLogPayloads) {
+      process.env.OPENCODE_LLM_RAW_LOG_PAYLOADS = "1"
+    }
     if (!Flag.OPENCODE_SERVER_PASSWORD) {
       console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
     }

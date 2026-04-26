@@ -103,6 +103,7 @@ export const dict = {
   "dialog.provider.opencode.note": "Curated models including Claude, GPT, Gemini and more",
   "dialog.provider.opencode.tagline": "Reliable optimized models",
   "dialog.provider.opencodeGo.tagline": "Low cost subscription for everyone",
+  "dialog.provider.ollama.note": "Connect models running locally via Ollama on this machine",
   "dialog.provider.anthropic.note": "Direct access to Claude models, including Pro and Max",
   "dialog.provider.copilot.note": "AI models for coding assistance via GitHub Copilot",
   "dialog.provider.openai.note": "GPT models for fast, capable general AI tasks",
@@ -156,6 +157,10 @@ export const dict = {
   "provider.connect.oauth.auto.confirmationCode": "Confirmation code",
   "provider.connect.toast.connected.title": "{{provider}} connected",
   "provider.connect.toast.connected.description": "{{provider}} models are now available to use.",
+
+  "provider.ollama.title": "Ollama",
+  "provider.ollama.description":
+    "Connect a local Ollama server running at http://localhost:11434/v1. The form starts with qwen3-coder:30b and you can edit or add model IDs for any other Ollama models you have installed locally. No API key is required.",
 
   "provider.custom.title": "Custom provider",
   "provider.custom.description.prefix": "Configure an OpenAI-compatible provider. See the ",

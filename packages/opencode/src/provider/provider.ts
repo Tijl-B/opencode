@@ -85,6 +85,79 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   })
 }
 
+function toRawBody(body: unknown) {
+  if (typeof body === "string") return body
+  if (body instanceof URLSearchParams) return body.toString()
+  if (body instanceof Uint8Array) return new TextDecoder().decode(body)
+  if (body === undefined || body === null) return ""
+  return String(body)
+}
+
+function printRawPayload(label: "request" | "response", info: Record<string, string | number | undefined>, body: string) {
+  process.stderr.write(`\n[llm-${label}] ${JSON.stringify(info)}\n`)
+  if (!body) return
+  process.stderr.write(body + "\n")
+}
+
+function ollamaTagsURL(baseURL: string) {
+  if (!URL.canParse(baseURL)) return
+  const url = new URL(baseURL)
+  const pathname = url.pathname.replace(/\/+$/, "")
+  const root = pathname.endsWith("/v1") ? pathname.slice(0, -3) : pathname
+  url.pathname = `${root || ""}/api/tags`
+  url.search = ""
+  url.hash = ""
+  return url.toString()
+}
+
+function fromOllamaTags(providerID: ProviderID, input: unknown): Record<string, Model> {
+  if (!isRecord(input) || !Array.isArray(input.models)) return {}
+  return Object.fromEntries(
+    input.models
+      .flatMap((item) => {
+        if (!isRecord(item)) return []
+        const id = (typeof item.model === "string" ? item.model : typeof item.name === "string" ? item.name : "").trim()
+        if (!id) return []
+        const details = isRecord(item.details) ? item.details : undefined
+        const context = typeof details?.context_length === "number" && details.context_length > 0 ? details.context_length : 128_000
+        const name = (typeof item.name === "string" ? item.name : id).trim() || id
+        return [
+          [
+            id,
+            {
+              id: ModelID.make(id),
+              providerID,
+              name,
+              family: "",
+              api: {
+                id,
+                url: "",
+                npm: "@ai-sdk/openai-compatible",
+              },
+              status: "active",
+              headers: {},
+              options: {},
+              cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+              limit: { context, output: 8_192 },
+              capabilities: {
+                temperature: true,
+                reasoning: false,
+                attachment: false,
+                toolcall: true,
+                input: { text: true, audio: false, image: false, video: false, pdf: false },
+                output: { text: true, audio: false, image: false, video: false, pdf: false },
+                interleaved: false,
+              },
+              release_date: "",
+              variants: {},
+            } satisfies Model,
+          ],
+        ]
+      })
+      .map(([id, model]) => [id, model] as const),
+  )
+}
+
 type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
 }
@@ -410,6 +483,42 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           },
         },
       }),
+    ollama: Effect.fnUntraced(function* (input: Info) {
+      const baseURL = typeof input.options?.baseURL === "string" ? input.options.baseURL : "http://localhost:11434/v1"
+      return {
+        autoload: false,
+        async discoverModels() {
+          const endpoint = ollamaTagsURL(baseURL)
+          if (!endpoint) return {}
+          const payload = await fetch(endpoint)
+            .then((response) => {
+              if (!response.ok) {
+                log.warn("ollama model discovery failed", {
+                  status: response.status,
+                  endpoint,
+                })
+                return
+              }
+              return response.json()
+            })
+            .catch((error) => {
+              log.warn("ollama model discovery failed", {
+                endpoint,
+                error,
+              })
+              return
+            })
+          if (!payload) return {}
+          const models = fromOllamaTags(input.id, payload)
+          log.info("ollama model discovery complete", {
+            endpoint,
+            count: Object.keys(models).length,
+            models: Object.keys(models),
+          })
+          return models
+        },
+      }
+    }),
     nvidia: () =>
       Effect.succeed({
         autoload: false,
@@ -1112,6 +1221,7 @@ const layer: Layer.Layer<
 
         // now read config providers - includes any modifications from plugin config() hook
         const configProviders = Object.entries(cfg.provider ?? {})
+        const configuredProviderIDs = new Set(configProviders.map(([providerID]) => ProviderID.make(providerID)))
         const disabled = new Set(cfg.disabled_providers ?? [])
         const enabled = cfg.enabled_providers ? new Set(cfg.enabled_providers) : null
 
@@ -1264,7 +1374,7 @@ const layer: Layer.Layer<
             continue
           }
           const result = yield* fn(data)
-          if (result && (result.autoload || providers[providerID])) {
+          if (result && (result.autoload || providers[providerID] || configuredProviderIDs.has(providerID))) {
             if (result.getModel) modelLoaders[providerID] = result.getModel
             if (result.vars) varsLoaders[providerID] = result.vars
             if (result.discoverModels) discoveryLoaders[providerID] = result.discoverModels
@@ -1284,19 +1394,24 @@ const layer: Layer.Layer<
           mergeProvider(providerID, partial)
         }
 
-        const gitlab = ProviderID.make("gitlab")
-        if (discoveryLoaders[gitlab] && providers[gitlab] && isProviderAllowed(gitlab)) {
+        if (Object.keys(discoveryLoaders).length > 0) {
           yield* Effect.promise(async () => {
-            try {
-              const discovered = await discoveryLoaders[gitlab]()
-              for (const [modelID, model] of Object.entries(discovered)) {
-                if (!providers[gitlab].models[modelID]) {
-                  providers[gitlab].models[modelID] = model
+            await Promise.all(
+              Object.entries(discoveryLoaders).map(async ([id, discover]) => {
+                const providerID = ProviderID.make(id)
+                if (!providers[providerID] || !isProviderAllowed(providerID)) return
+                const discovered = await discover().catch((error) => {
+                  log.warn("state discovery error", { id, error })
+                  return
+                })
+                if (!discovered) return
+                for (const [modelID, model] of Object.entries(discovered)) {
+                  if (!providers[providerID].models[modelID]) {
+                    providers[providerID].models[modelID] = model
+                  }
                 }
-              }
-            } catch (e) {
-              log.warn("state discovery error", { id: "gitlab", error: e })
-            }
+              }),
+            )
           })
         }
 
@@ -1445,6 +1560,7 @@ const layer: Layer.Layer<
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = init ?? {}
+          const url = String(input)
           const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
           const signals: AbortSignal[] = []
 
@@ -1471,11 +1587,68 @@ const layer: Layer.Layer<
             }
           }
 
+          if (Flag.OPENCODE_LLM_RAW_LOG_PAYLOADS) {
+            printRawPayload(
+              "request",
+              {
+                providerID: String(model.providerID),
+                modelID: String(model.id),
+                method: opts.method ?? "GET",
+                url,
+              },
+              toRawBody(opts.body),
+            )
+          }
+
           const res = await fetchFn(input, {
             ...opts,
             // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
             timeout: false,
           })
+
+          if (Flag.OPENCODE_LLM_RAW_LOG_PAYLOADS) {
+            const contentType = res.headers.get("content-type") ?? ""
+            if (res.body && contentType.includes("text/event-stream")) {
+              const [stream, tap] = res.body.tee()
+              void new Response(tap)
+                .text()
+                .then((body: string) => {
+                  printRawPayload(
+                    "response",
+                    {
+                      providerID: String(model.providerID),
+                      modelID: String(model.id),
+                      status: res.status,
+                      url,
+                    },
+                    body,
+                  )
+                })
+              const streamed = new Response(stream, {
+                headers: new Headers(res.headers),
+                status: res.status,
+                statusText: res.statusText,
+              })
+              if (!chunkAbortCtl) return streamed
+              return wrapSSE(streamed, chunkTimeout, chunkAbortCtl)
+            }
+
+            void res
+              .clone()
+              .text()
+              .then((body: string) => {
+                printRawPayload(
+                  "response",
+                  {
+                    providerID: String(model.providerID),
+                    modelID: String(model.id),
+                    status: res.status,
+                    url,
+                  },
+                  body,
+                )
+              })
+          }
 
           if (!chunkAbortCtl) return res
           return wrapSSE(res, chunkTimeout, chunkAbortCtl)

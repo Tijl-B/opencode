@@ -1,6 +1,6 @@
 import { Component, Show } from "solid-js"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { popularProviders, useProviders } from "@/hooks/use-providers"
+import { localProviders, popularProviders, useProviders } from "@/hooks/use-providers"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { Tag } from "@opencode-ai/ui/tag"
@@ -20,6 +20,7 @@ export const DialogSelectProvider: Component = () => {
   const otherGroup = () => language.t("dialog.provider.group.other")
   const customLabel = () => language.t("settings.providers.tag.custom")
   const note = (id: string) => {
+    if (id === "ollama") return language.t("dialog.provider.ollama.note")
     if (id === "anthropic") return language.t("dialog.provider.anthropic.note")
     if (id === "openai") return language.t("dialog.provider.openai.note")
     if (id.startsWith("github-copilot")) return language.t("dialog.provider.copilot.note")
@@ -35,7 +36,11 @@ export const DialogSelectProvider: Component = () => {
         key={(x) => x?.id}
         items={() => {
           language.locale()
-          return [{ id: CUSTOM_ID, name: customLabel() }, ...providers.all()]
+          return [
+            { id: CUSTOM_ID, name: customLabel() },
+            ...localProviders.filter((item) => !providers.all().some((provider) => provider.id === item.id)),
+            ...providers.all(),
+          ]
         }}
         filterKeys={["id", "name"]}
         groupBy={(x) => (popularProviders.includes(x.id) ? popularGroup() : otherGroup())}
@@ -56,6 +61,10 @@ export const DialogSelectProvider: Component = () => {
           if (!x) return
           if (x.id === CUSTOM_ID) {
             dialog.show(() => <DialogCustomProvider back="providers" />)
+            return
+          }
+          if (x.id === "ollama") {
+            dialog.show(() => <DialogCustomProvider back="providers" preset="ollama" />)
             return
           }
           dialog.show(() => <DialogConnectProvider provider={x.id} />)
