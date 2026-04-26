@@ -1,3 +1,4 @@
+import type { Provider } from "@opencode-ai/sdk/v2/client"
 import { useGlobalSync } from "@/context/global-sync"
 import { decode64 } from "@/utils/base64"
 import { useParams } from "@solidjs/router"
@@ -14,7 +15,9 @@ export const popularProviders = [
   "openrouter",
   "vercel",
 ]
-export const localProviders = [{ id: "ollama", name: "Ollama" }] as const
+export const localProviders: Provider[] = [
+  { id: "ollama", name: "Ollama", source: "config", env: [], options: {}, models: {} },
+]
 const popularProviderSet = new Set(popularProviders)
 
 export function useProviders() {
